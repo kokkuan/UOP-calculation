@@ -1,0 +1,12 @@
+# Source airport data and generated output — never commit real financial data
+MA SEPANG/
+MASB/
+Output/
+*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor/tooling
+.claude/
