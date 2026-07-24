@@ -31,8 +31,8 @@ OUT        = OUTPUT_DIR / "PAX_Rate_Matrix_Test.xlsx"
 START_YEAR = 2026
 END_YEAR   = 2069
 YEARS      = list(range(START_YEAR, END_YEAR + 1))   # 2026 … 2069 inclusive
-ALL_LIVES  = list(range(2, len(YEARS) + 1))           # 2 .. 44, full range, no skipping
-MAX_LIFE   = len(YEARS)                               # 44 -- any asset life >= this collapses to the same rate profile
+ALL_LIVES  = list(range(1, len(YEARS) + 1))           # 1 .. 44, full range, no skipping
+MAX_LIFE   = len(YEARS)                               # 44 -- any remaining life >= this collapses to the same rate profile
 
 # "1. PAX BUDGET": every section (International/ASEAN/NON ASEAN/Domestic/Total)
 # shares the same column layout: col0=Airport, col1=<section label>, col2=2026 ... col45=2069

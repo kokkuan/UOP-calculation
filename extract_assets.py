@@ -9,16 +9,24 @@ instead of per-airport UOP workbooks.
 Each asset sheet has:
   - columns "Asset" .. "ORI. USEFUL LIFE" — copied as-is from 2.DATABASE,
     no calculation
+  - "Remaining Useful Life" — REAL Excel formula: (year of Cap.Date + ORI.
+    USEFUL LIFE) - 2026, i.e. years left of the asset's original life as of
+    the 2026 cut-off. If that's <= 0 (life nominally already expired but
+    the asset still carries real Book val. — true for ~11.5% of assets),
+    it falls back to the full remaining concession window (MAX_LIFE, 44).
+    Otherwise clamped to MAX_LIFE too, since the rate matrix only has rows
+    1-44 (pax data only spans 2026-2069; any life >= 44 collapses to the
+    same rate profile as life 44).
   - "New DepKy" — VLOOKUP of NEW RATE 2026 (rounded to 4dp) against the
     single global "DEPKEY_LOOKUP" sheet (copied from "3.DEPKEY FROM SAP"
     in the source workbook), giving the SAP depreciation key for the
     earliest year only
   - columns "NEW RATE" .. "Difference" — REAL Excel formulas (INDEX/MATCH,
     SUM), referencing the "<label>" rate-matrix sheet already in the same
-    workbook. Useful life is clamped to MAX_LIFE (44) in the MATCH, since
-    life data in 2.DATABASE runs up to 77 years but the rate matrix only
-    has rows 2-44 (any life >= 44 collapses to the same rate profile,
-    because pax data only spans 2026-2069).
+    workbook, matched on Remaining Useful Life. Depreciation amounts are
+    based on Book val. (net of Accum.dep. already recognized), not
+    Acquis.val. — depreciating the full acquisition cost again from 2026
+    would double-count whatever's already been expensed pre-2026.
   - a "TO NOTE" sheet listing every asset whose New DepKy could not be
     matched (its computed rate has no equal entry in 3.DEPKEY FROM SAP).
 
@@ -44,13 +52,15 @@ ASSET_HEADERS = [
     "Book val.", "Crcy", "BusA", "APC", "Class", "DepKy", "ORI. USEFUL LIFE",
 ]
 ASSET_INFO_COLS = len(ASSET_HEADERS)   # 13
-COL_ACQUIS_IDX  = 4    # index of "Acquis.val." within the asset-row tuple
+COL_CAPDATE_IDX = 2    # index of "Cap.Date" within the asset-row tuple
+COL_BOOKVAL_IDX = 6    # index of "Book val." within the asset-row tuple
 COL_LIFE_IDX    = 12   # index of "ORI. USEFUL LIFE" within the asset-row tuple
 
 # ── Output sheet column layout (1-based) ─────────────────────────────────────
-# Block order: asset info | New DepKy | NEW RATE (all years) | Sum/Diff | Dep Amount (all years) | Total/Diff
+# Block order: asset info | Remaining Useful Life | New DepKy | NEW RATE (all years) | Sum/Diff | Dep Amount (all years) | Total/Diff
 N_YEARS         = len(YEARS)
-NEWDEPKY_COL    = ASSET_INFO_COLS + 1
+REMLIFE_COL     = ASSET_INFO_COLS + 1
+NEWDEPKY_COL    = REMLIFE_COL + 1
 NEW_RATE_START  = NEWDEPKY_COL + 1
 SUM_COL         = NEW_RATE_START + N_YEARS
 DIFF_COL        = SUM_COL + 1
@@ -58,13 +68,15 @@ DEP_START       = DIFF_COL + 1
 TOTAL_COL       = DEP_START + N_YEARS
 DIFFTOTAL_COL   = TOTAL_COL + 1
 
-LIFE_COL_LETTER   = get_column_letter(COL_LIFE_IDX + 1)     # M
-ACQUIS_COL_LETTER = get_column_letter(COL_ACQUIS_IDX + 1)   # E
+CAPDATE_COL_LETTER = get_column_letter(COL_CAPDATE_IDX + 1)   # C
+LIFE_COL_LETTER    = get_column_letter(COL_LIFE_IDX + 1)      # M
+BOOKVAL_COL_LETTER = get_column_letter(COL_BOOKVAL_IDX + 1)   # G
+REMLIFE_COL_LETTER = get_column_letter(REMLIFE_COL)           # N
 
 # ── Rate-matrix sheet layout (built by pax_rate_matrix.py's add_rate_sheet) ──
 RATE_MATRIX_LAST_COL   = get_column_letter(1 + N_YEARS)        # AS
 RATE_MATRIX_DATA_ROW1  = 4
-RATE_MATRIX_DATA_ROWN  = 3 + len(ALL_LIVES)                    # 46
+RATE_MATRIX_DATA_ROWN  = 3 + len(ALL_LIVES)                    # 47 (lives 1-44)
 
 DEPKEY_LOOKUP_SHEET = "DEPKEY_LOOKUP"
 
@@ -99,11 +111,12 @@ def _cell(ws, row, col, value=None, fill=None, font=None, align="center", num_fm
 
 def build_full_headers() -> list:
     headers = list(ASSET_HEADERS)
+    headers += ["Remaining Useful Life"]
     headers += ["New DepKy"]
     headers += [f"NEW RATE {y}" for y in YEARS]
     headers += ["Sum UOP Rates", "Diff (Sum-1)"]
     headers += [f"Dep Amount {y}" for y in YEARS]
-    headers += ["Total Dep", "Diff (Total-Acquis)"]
+    headers += ["Total Dep", "Diff (Total-BookVal)"]
     return headers
 
 
@@ -113,8 +126,17 @@ def write_asset_row(ws, row_idx: int, asset_row: tuple, rate_sheet: str):
         align = "left" if isinstance(val, str) else "center"
         _cell(ws, row_idx, col_idx, val, align=align)
 
-    life_ref   = f"MIN(${LIFE_COL_LETTER}{row_idx},{MAX_LIFE})"
-    acquis_ref = f"${ACQUIS_COL_LETTER}{row_idx}"
+    # ── Remaining Useful Life = (year of Cap.Date + ORI. USEFUL LIFE) - 2026 ──
+    # Cap.Date is stored as text "DD.MM.YYYY", so pull the year via RIGHT(...,4).
+    # If the original life has nominally already expired (<=0) but the asset
+    # still carries Book val., fall back to the remaining concession window.
+    capdate_ref = f"${CAPDATE_COL_LETTER}{row_idx}"
+    life_end_ref = f"(VALUE(RIGHT({capdate_ref},4))+${LIFE_COL_LETTER}{row_idx}-{START_YEAR})"
+    remlife_formula = f"=IF({life_end_ref}<=0,{MAX_LIFE},MIN({life_end_ref},{MAX_LIFE}))"
+    _cell(ws, row_idx, REMLIFE_COL, remlife_formula)
+
+    life_ref = f"${REMLIFE_COL_LETTER}{row_idx}"
+    book_ref = f"${BOOKVAL_COL_LETTER}{row_idx}"
 
     # ── New DepKy: VLOOKUP of NEW RATE 2026 (rounded) against the global DepKy lookup ──
     new_rate_2026_ref = f"{get_column_letter(NEW_RATE_START)}{row_idx}"
@@ -143,16 +165,16 @@ def write_asset_row(ws, row_idx: int, asset_row: tuple, rate_sheet: str):
     _cell(ws, row_idx, SUM_COL, f"=SUM({sum_range})", num_fmt="0.0000%")
     _cell(ws, row_idx, DIFF_COL, f"={get_column_letter(SUM_COL)}{row_idx}-1", num_fmt="0.0000%")
 
-    # ── Dep amount per year = acquisition value * rate ───────────────────────
+    # ── Dep amount per year = Book val. (net of prior Accum.dep.) * rate ─────
     for i in range(N_YEARS):
         col = DEP_START + i
-        formula = f"={acquis_ref}*{new_rate_refs[i]}"
+        formula = f"={book_ref}*{new_rate_refs[i]}"
         _cell(ws, row_idx, col, formula, num_fmt="#,##0.00")
 
-    # ── Total dep / difference from acquisition value ────────────────────────
+    # ── Total dep / difference from Book val. ────────────────────────────────
     dep_range = f"{get_column_letter(DEP_START)}{row_idx}:{get_column_letter(DEP_START + N_YEARS - 1)}{row_idx}"
     _cell(ws, row_idx, TOTAL_COL, f"=SUM({dep_range})", num_fmt="#,##0.00")
-    _cell(ws, row_idx, DIFFTOTAL_COL, f"={get_column_letter(TOTAL_COL)}{row_idx}-{acquis_ref}", num_fmt="#,##0.00")
+    _cell(ws, row_idx, DIFFTOTAL_COL, f"={get_column_letter(TOTAL_COL)}{row_idx}-{book_ref}", num_fmt="#,##0.00")
 
 
 def add_divider_sheet(wb_out, sheet_name: str):
@@ -350,6 +372,20 @@ def read_database_assets(ws):
         }
 
 
+def compute_remaining_life(cap_date: str, use: int, max_life: int = MAX_LIFE) -> int:
+    """
+    Mirrors the "Remaining Useful Life" Excel formula in write_asset_row:
+    (year of Cap.Date + ORI. USEFUL LIFE) - START_YEAR, clamped to max_life,
+    falling back to max_life if the original life has nominally already
+    expired (<=0) but the asset still carries Book val.
+    """
+    cap_year = int(str(cap_date)[-4:])
+    life_end = cap_year + use - START_YEAR
+    if life_end <= 0:
+        return max_life
+    return min(life_end, max_life)
+
+
 def _load_join_inputs(src):
     """Shared read of 1. PAX BUDGET / 1.MPPA / MASTERFILE / 3.DEPKEY FROM SAP / 2.DATABASE."""
     wb = load_source(src)
@@ -380,9 +416,9 @@ def find_new_depky_gaps(src=SRC) -> list:
         airport_name = busa_to_airport[a["BusA"]]
         canonical = airport_key_map[airport_name]
         if canonical not in rate_matrix_cache:
-            rate_matrix_cache[canonical] = build_rate_matrix(capped[canonical], set(range(2, MAX_LIFE + 1)))
+            rate_matrix_cache[canonical] = build_rate_matrix(capped[canonical], set(range(1, MAX_LIFE + 1)))
 
-        eff_life = min(max(a["Use"], 2), MAX_LIFE)
+        eff_life = compute_remaining_life(a["Cap.Date"], a["Use"])
         rate_2026 = rate_matrix_cache[canonical][eff_life][START_YEAR]
         new_depky = depkey_lookup.get(round(rate_2026, 4), "")
 
