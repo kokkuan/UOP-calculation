@@ -28,15 +28,18 @@ from extract_assets import add_asset_sheets
 REQUIRED_SHEETS = ("1. PAX BUDGET", "1.MPPA", "MASTERFILE", "2.DATABASE", "3.DEPKEY FROM SAP")
 
 
-def run_pipeline(src_bytes: bytes) -> tuple:
+def run_pipeline(src_bytes: bytes, progress_cb=None) -> tuple:
     """
     src_bytes: the uploaded consolidated workbook's raw bytes.
+    progress_cb: optional callback(phase, i, total, label), forwarded to
+    both pipeline phases — see build_rate_matrix_workbook and
+    add_asset_sheets for the exact contract.
     Returns (output_bytesio, log_lines).
     """
-    wb, airport_key_map, log = build_rate_matrix_workbook(src_bytes)
+    wb, airport_key_map, log = build_rate_matrix_workbook(src_bytes, progress_cb=progress_cb)
     log.append(f"\n{len(airport_key_map)} airports matched to a rate matrix.")
 
-    log += add_asset_sheets(wb, src_bytes)
+    log += add_asset_sheets(wb, src_bytes, progress_cb=progress_cb)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -62,30 +65,53 @@ if uploaded_file:
     st.write(f"Ready: {uploaded_file.name}")
 
     if st.button("Run recalculation", type="primary"):
-        with st.spinner("Processing..."):
-            src_bytes = uploaded_file.getvalue()
-            wb_ro = None
-            try:
-                import openpyxl
-                wb_ro = openpyxl.load_workbook(io.BytesIO(src_bytes), read_only=True)
-                missing = [s for s in REQUIRED_SHEETS if s not in wb_ro.sheetnames]
-            finally:
-                if wb_ro is not None:
-                    wb_ro.close()
+        src_bytes = uploaded_file.getvalue()
+        wb_ro = None
+        try:
+            import openpyxl
+            wb_ro = openpyxl.load_workbook(io.BytesIO(src_bytes), read_only=True)
+            missing = [s for s in REQUIRED_SHEETS if s not in wb_ro.sheetnames]
+        finally:
+            if wb_ro is not None:
+                wb_ro.close()
 
-            if missing:
-                st.error(f"Missing required sheet(s): {missing}")
-            else:
-                output_buf, log_lines = run_pipeline(src_bytes)
+        if missing:
+            st.error(f"Missing required sheet(s): {missing}")
+        else:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            progress_state = {"rate_matrix_total": None, "assets_total": None}
 
-                st.success("Done.")
-                st.code("\n".join(log_lines))
+            def progress_cb(phase, i, total, label):
+                if phase == "rate_matrix":
+                    progress_state["rate_matrix_total"] = total
+                    assets_total_estimate = progress_state["assets_total"] or total
+                    rate_matrix_total = total
+                    done = i
+                    phase_label = "Building rate matrix"
+                else:
+                    progress_state["assets_total"] = total
+                    rate_matrix_total = progress_state["rate_matrix_total"] or total
+                    assets_total_estimate = total
+                    done = rate_matrix_total + i
+                    phase_label = "Extracting assets"
 
-                st.download_button(
-                    "Download PAX_Rate_Matrix_Test.xlsx",
-                    data=output_buf,
-                    file_name="PAX_Rate_Matrix_Test.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+                grand_total = rate_matrix_total + assets_total_estimate
+                progress_bar.progress(min(done / grand_total, 1.0))
+                status_text.text(f"{phase_label}: {label} ({i}/{total})")
+
+            output_buf, log_lines = run_pipeline(src_bytes, progress_cb=progress_cb)
+
+            progress_bar.progress(1.0)
+            status_text.empty()
+            st.success("Done.")
+            st.code("\n".join(log_lines))
+
+            st.download_button(
+                "Download PAX_Rate_Matrix_Test.xlsx",
+                data=output_buf,
+                file_name="PAX_Rate_Matrix_Test.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 else:
     st.info("Upload the consolidated UOP workbook to get started.")
