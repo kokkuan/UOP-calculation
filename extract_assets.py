@@ -10,9 +10,11 @@ Each asset sheet has:
   - columns "Asset" .. "ORI. USEFUL LIFE" — copied as-is from 2.DATABASE,
     no calculation
   - "Remaining Useful Life" — REAL Excel formula: (year of Cap.Date + ORI.
-    USEFUL LIFE) - 2026, i.e. years left of the asset's original life as of
-    the 2026 cut-off. If that's <= 0 (life nominally already expired but
-    the asset still carries real Book val. — true for ~11.5% of assets),
+    USEFUL LIFE) - 2026 + 1, i.e. years left of the asset's original life as
+    of the 2026 cut-off, not counting the capitalization year itself as a
+    life-year (life runs through cap_year + Use inclusive). If that's <= 0
+    (life nominally already expired but the asset still carries real Book
+    val. — true for ~11.5% of assets),
     it falls back to the full remaining concession window (MAX_LIFE, 44).
     Otherwise clamped to MAX_LIFE too, since the rate matrix only has rows
     1-44 (pax data only spans 2026-2069; any life >= 44 collapses to the
@@ -126,12 +128,14 @@ def write_asset_row(ws, row_idx: int, asset_row: tuple, rate_sheet: str):
         align = "left" if isinstance(val, str) else "center"
         _cell(ws, row_idx, col_idx, val, align=align)
 
-    # ── Remaining Useful Life = (year of Cap.Date + ORI. USEFUL LIFE) - 2026 ──
+    # ── Remaining Useful Life = (year of Cap.Date + ORI. USEFUL LIFE) - 2026 + 1 ──
     # Cap.Date is stored as text "DD.MM.YYYY", so pull the year via RIGHT(...,4).
-    # If the original life has nominally already expired (<=0) but the asset
-    # still carries Book val., fall back to the remaining concession window.
+    # The capitalization year itself doesn't count as a life-year (the asset's
+    # life runs through cap_year + Use inclusive), so +1 vs. counting cap_year
+    # as year 1. If the original life has nominally already expired (<=0) but
+    # the asset still carries Book val., fall back to the remaining concession window.
     capdate_ref = f"${CAPDATE_COL_LETTER}{row_idx}"
-    life_end_ref = f"(VALUE(RIGHT({capdate_ref},4))+${LIFE_COL_LETTER}{row_idx}-{START_YEAR})"
+    life_end_ref = f"(VALUE(RIGHT({capdate_ref},4))+${LIFE_COL_LETTER}{row_idx}-{START_YEAR}+1)"
     remlife_formula = f"=IF({life_end_ref}<=0,{MAX_LIFE},MIN({life_end_ref},{MAX_LIFE}))"
     _cell(ws, row_idx, REMLIFE_COL, remlife_formula)
 
@@ -375,12 +379,14 @@ def read_database_assets(ws):
 def compute_remaining_life(cap_date: str, use: int, max_life: int = MAX_LIFE) -> int:
     """
     Mirrors the "Remaining Useful Life" Excel formula in write_asset_row:
-    (year of Cap.Date + ORI. USEFUL LIFE) - START_YEAR, clamped to max_life,
+    (year of Cap.Date + ORI. USEFUL LIFE) - START_YEAR + 1, clamped to max_life,
     falling back to max_life if the original life has nominally already
-    expired (<=0) but the asset still carries Book val.
+    expired (<=0) but the asset still carries Book val. The +1 excludes the
+    capitalization year itself from the life count (life runs through
+    cap_year + use inclusive).
     """
     cap_year = int(str(cap_date)[-4:])
-    life_end = cap_year + use - START_YEAR
+    life_end = cap_year + use - START_YEAR + 1
     if life_end <= 0:
         return max_life
     return min(life_end, max_life)
