@@ -456,7 +456,7 @@ def group_assets_by_airport(src=SRC) -> tuple:
 
 # ── Whole-workbook builder (reused by the CLI entry point and app.py) ────────
 
-def add_asset_sheets(wb, src=SRC):
+def add_asset_sheets(wb, src=SRC, progress_cb=None):
     """
     Append DepKy lookup, divider, per-airport asset sheets, Summary and
     TO NOTE sheets to an existing workbook (normally the one built by
@@ -480,17 +480,24 @@ def add_asset_sheets(wb, src=SRC):
     full_headers = build_full_headers()
     built_airports = []
     log = []
-    for label in sorted(grouped):
+    airport_labels = sorted(grouped)
+    total = len(airport_labels)
+    for i, label in enumerate(airport_labels, start=1):
         rows = grouped[label]
         rate_sheet = sheet_name_for(label)
         if rate_sheet not in wb.sheetnames:
             log.append(f"WARNING: {label} — rate-matrix sheet '{rate_sheet}' not found, skipping ({len(rows)} assets)")
+            if progress_cb is not None:
+                progress_cb("assets", i, total, label)
             continue
 
         log.append(f"{label:20s}: {len(rows)} asset line items")
         assets_sheet_name = (label.replace(" ", "_") + "_ASSETS")[:31]
         add_asset_sheet(wb, assets_sheet_name, label, full_headers, rows, rate_sheet)
         built_airports.append((label, assets_sheet_name))
+
+        if progress_cb is not None:
+            progress_cb("assets", i, total, label)
 
     add_summary_sheet(wb, SUMMARY_SHEET_NAME, built_airports)
 
