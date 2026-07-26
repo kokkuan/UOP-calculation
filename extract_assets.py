@@ -461,6 +461,11 @@ def add_asset_sheets(wb, src=SRC, progress_cb=None):
     Append DepKy lookup, divider, per-airport asset sheets, Summary and
     TO NOTE sheets to an existing workbook (normally the one built by
     pax_rate_matrix.build_rate_matrix_workbook). Mutates `wb` in place.
+
+    If progress_cb is provided, it will be called as progress_cb("assets", i, total, label)
+    once per airport in sorted(grouped), where i is 1-based index and total = len(grouped).
+    The callback fires for each airport regardless of whether its rate-matrix sheet was found
+    (including the skip/WARNING path when rate_sheet is missing from the workbook).
     """
     grouped, depkey_lookup = group_assets_by_airport(src)
 

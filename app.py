@@ -97,7 +97,10 @@ if uploaded_file:
                     phase_label = "Extracting assets"
 
                 grand_total = rate_matrix_total + assets_total_estimate
-                progress_bar.progress(min(done / grand_total, 1.0))
+                current_fraction = min(done / grand_total, 1.0)
+                progress_state.setdefault("max_fraction", 0.0)
+                progress_state["max_fraction"] = max(progress_state["max_fraction"], current_fraction)
+                progress_bar.progress(progress_state["max_fraction"])
                 status_text.text(f"{phase_label}: {label} ({i}/{total})")
 
             output_buf, log_lines = run_pipeline(src_bytes, progress_cb=progress_cb)
