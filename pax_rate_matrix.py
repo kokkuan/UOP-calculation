@@ -206,10 +206,13 @@ def add_rate_sheet(wb_out, sheet_name: str, airport_label: str,
 
 # ── Whole-workbook builder (reused by the CLI entry point and app.py) ────────
 
-def build_rate_matrix_workbook(src=SRC):
+def build_rate_matrix_workbook(src=SRC, progress_cb=None):
     """
     Read the source workbook and build a fresh workbook with one rate-matrix
     sheet per MASTERFILE airport (all 28). Returns (wb_out, airport_key_map).
+
+    If progress_cb is provided, it will be called once per airport with the
+    airport name as argument.
     """
     wb = load_source(src)
     pax = read_pax_totals(wb["1. PAX BUDGET"])
@@ -234,6 +237,9 @@ def build_rate_matrix_workbook(src=SRC):
         if was_capped:
             wb_out[sheet_name].cell(row=PAX_ROW, column=YEAR_COL_START_CELL).fill = CAPPED_FILL
         log.append(f"Sheet added: {airport}{'  (2026 capped — highlighted)' if was_capped else ''}")
+
+        if progress_cb is not None:
+            progress_cb(airport)
 
     return wb_out, airport_key_map, log
 
