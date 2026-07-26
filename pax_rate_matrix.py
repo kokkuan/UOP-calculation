@@ -211,8 +211,8 @@ def build_rate_matrix_workbook(src=SRC, progress_cb=None):
     Read the source workbook and build a fresh workbook with one rate-matrix
     sheet per MASTERFILE airport (all 28). Returns (wb_out, airport_key_map).
 
-    If progress_cb is provided, it will be called once per airport with the
-    airport name as argument.
+    If progress_cb is provided, it will be called as progress_cb("rate_matrix", i, total, airport)
+    once per airport, where i is 1-based index and total = len(matched_airports).
     """
     wb = load_source(src)
     pax = read_pax_totals(wb["1. PAX BUDGET"])
@@ -228,7 +228,8 @@ def build_rate_matrix_workbook(src=SRC, progress_cb=None):
     wb_out.remove(wb_out.active)
 
     log = []
-    for airport in matched_airports:
+    total = len(matched_airports)
+    for i, airport in enumerate(matched_airports, start=1):
         rates = build_rate_matrix(capped[airport], set(ALL_LIVES))
         sheet_name = sheet_name_for(airport)
         add_rate_sheet(wb_out, sheet_name, airport, rates, ALL_LIVES, capped[airport])
@@ -239,7 +240,7 @@ def build_rate_matrix_workbook(src=SRC, progress_cb=None):
         log.append(f"Sheet added: {airport}{'  (2026 capped — highlighted)' if was_capped else ''}")
 
         if progress_cb is not None:
-            progress_cb(airport)
+            progress_cb("rate_matrix", i, total, airport)
 
     return wb_out, airport_key_map, log
 
